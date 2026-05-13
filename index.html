@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Wsido Xrtp ECHO | Astronaut Cabin Optimized</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400&family=IBM+Plex+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-color: #000000; 
+      --transition-slow: 1.5s cubic-bezier(0.25, 1, 0.5, 1);
+      --text-dim: rgba(255, 255, 255, 0.35);
+      --text-mid: rgba(255, 255, 255, 0.65);
+      --text-bright: rgba(255, 255, 255, 0.95);
+    }
+
+    * { box-sizing: border-box; }
+    
+    body:not(.mobile-mode) * { cursor: none !important; }
+    body.mobile-mode * { cursor: auto !important; }
+
+    body, html {
+      margin: 0; padding: 0; background-color: var(--bg-color);
+      color: var(--text-mid); overflow: hidden;
+      font-family: 'IBM Plex Mono', monospace;
+      height: 100vh; width: 100vw;
+    }
+
+    /* =========================================
+       LAYER 0: 視覺底層
+    ========================================= */
+    #canvas-container { position: absolute; inset: 0; z-index: 0; opacity: 0; pointer-events: none; transition: opacity 0.5s ease-out; }
+    #canvas-container.show { opacity: 1; pointer-events: auto; }
+
+    .atmosphere { 
+      position: fixed; inset: 0; pointer-events: none; z-index: 10; 
+      mix-blend-mode: screen; opacity: 0; transition: opacity 0.5s ease-out, background 2s ease; 
+      background: radial-gradient(circle at center, rgba(30, 30, 30, 0.25) 0%, transparent 70%); 
+      filter: blur(25px); 
+    }
+    .atmosphere.show { opacity: 1; }
+    
+    .vignette { position: fixed; inset: 0; pointer-events: none; z-index: 40; background: radial-gradient(circle at center, transparent 0%, #000000 95%); }
+    .noise { position: fixed; inset: 0; opacity: 0.035; pointer-events: none; z-index: 45; background-image: url("https://grainy-gradients.vercel.app/noise.svg"); mix-blend-mode: overlay; }
+    #flash-overlay { position: fixed; inset: 0; background: #fff; z-index: 150; pointer-events: none; opacity: 0; mix-blend-mode: overlay; transition: opacity 0.1s; }
+
+    /* =========================================
+       純白單點游標
+    ========================================= */
+    #cursor-dot { 
+      position: fixed; top: 0; left: 0; width: 4px; height: 4px; 
+      background: #fff; border-radius: 50%; pointer-events: none; 
+      z-index: 9999; box-shadow: 0 0 8px rgba(255,255,255,1); 
+      transform: translate(-50%, -50%);
+    }
+    body.mobile-mode #cursor-dot { display: none !important; opacity: 0; }
+
+    /* =========================================
+       漂流模式 (Drift Mode) - 僅隱藏UI
+    ========================================= */
+    .fade-ui { transition: opacity 1.5s ease, filter 1.5s ease; }
+    body.idle-mode .fade-ui { opacity: 0 !important; pointer-events: none; filter: blur(5px); }
+
+    /* =========================================
+       宇航艙 HUD 與 UI 基礎
+    ========================================= */
+    #hud-layer { position: absolute; top: 2rem; left: 2.5rem; z-index: 120; display: flex; flex-direction: column; gap: 8px; opacity: 0; pointer-events: none; }
+    #hud-layer.visible { opacity: 1; pointer-events: auto; }
+    .hud-title { font-size: 10px; color: var(--text-bright); letter-spacing: 0.3em; font-weight: 500; text-shadow: 0 0 10px rgba(255,255,255,0.4); margin-bottom: 5px; }
+    .hud-stats { font-size: 9px; color: var(--text-dim); letter-spacing: 0.15em; line-height: 1.8; border-left: 1px solid rgba(255,255,255,0.2); padding-left: 10px; }
+    .hud-highlight { color: var(--text-mid); }
+    
+    #btn-back { position: absolute; bottom: 2.5rem; left: 2.5rem; z-index: 120; background: none; border: none; font-family: inherit; font-size: 10px; color: var(--text-dim); letter-spacing: 0.2em; transition: all 0.4s; opacity: 0; pointer-events: none; }
+    #btn-back.visible { opacity: 1; pointer-events: auto; }
+    @media (hover: hover) and (pointer: fine) { #btn-back:hover { color: var(--text-bright); letter-spacing: 0.3em; text-shadow: 0 0 10px rgba(255,255,255,0.6); } }
+
+    .phase-layer { position: absolute; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center; justify-content: center; opacity: 0; pointer-events: none; filter: blur(10px); transform: scale(0.98); transition: opacity var(--transition-slow), filter var(--transition-slow), transform var(--transition-slow); }
+    .phase-layer.active { opacity: 1; pointer-events: auto; filter: blur(0px); transform: scale(1); }
+    .phase-title { font-size: 11px; color: var(--text-dim); letter-spacing: 0.4em; margin-bottom: 3rem; text-transform: uppercase; text-align: center; max-width: 80%; line-height: 1.5; }
+    
+    .options-container { display: flex; gap: 3rem; flex-wrap: wrap; justify-content: center; width: 100%; max-width: 600px; }
+    body.mobile-mode .options-container { flex-direction: column; gap: 2rem; align-items: center; }
+
+    .btn-sys { background: none; border: 1px solid rgba(255,255,255,0.15); font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--text-mid); letter-spacing: 0.2em; padding: 12px 24px; transition: all 0.4s; text-transform: uppercase; position: relative; overflow: hidden; }
+    .btn-sys::before { content: ''; position: absolute; top: 0; left: -100%; width: 100%; height: 100%; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15), transparent); transition: 0.4s; }
+    @media (hover: hover) and (pointer: fine) { .btn-sys:hover { color: var(--text-bright); border-color: rgba(255,255,255,0.5); text-shadow: 0 0 15px rgba(255,255,255,0.4); } .btn-sys:hover::before { left: 100%; } }
+
+    #loading-text { font-size: 14px; color: var(--text-bright); letter-spacing: 0.3em; margin-bottom: 2rem; font-family: 'Space Grotesk', sans-serif; opacity: 0.9; }
+    .loading-bar { width: 250px; height: 1px; background: rgba(255,255,255,0.15); position: relative; }
+    .loading-fill { height: 100%; background: var(--text-bright); width: 0%; box-shadow: 0 0 12px rgba(255,255,255,0.8); transition: width 0.1s; }
+
+    /* =========================================
+       主空間
+    ========================================= */
+    .core-title { font-family: 'Space Grotesk', sans-serif; color: var(--text-bright); font-size: clamp(2.5rem, 6vw, 4.5rem); font-weight: 300; letter-spacing: 0.35em; text-transform: uppercase; text-shadow: 0 0 25px rgba(255,255,255,0.2); margin-bottom: 3rem; text-align: center; pointer-events: none; transition: opacity 1s ease; }
+    
+    .main-nav { display: flex; gap: 4rem; }
+    body.mobile-mode .main-nav { gap: 2rem; }
+    .nav-btn { background: none; border: none; font-family: inherit; font-size: 11px; color: var(--text-mid); letter-spacing: 0.2em; transition: 0.4s; padding: 10px; }
+    @media (hover: hover) and (pointer: fine) { .nav-btn:hover { color: var(--text-bright); text-shadow: 0 0 10px rgba(255,255,255,0.5); letter-spacing: 0.3em; } }
+
+    /* 頂級漸層音量控制 */
+    .audio-controls { position: absolute; bottom: 2.5rem; right: 2.5rem; display: flex; flex-direction: column; align-items: flex-end; gap: 15px; z-index: 120; }
+    .vol-slider { -webkit-appearance: none; appearance: none; width: 140px; height: 3px; border-radius: 999px; outline: none; background: rgba(255,255,255,0.15); transition: 0.2s; }
+    .vol-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 0 8px rgba(255,255,255,0.8); transition: transform 0.2s; }
+    .vol-slider:hover::-webkit-slider-thumb { transform: scale(1.2); box-shadow: 0 0 12px rgba(255,255,255,1); }
+
+    /* =========================================
+       微型視窗 (Modals)
+    ========================================= */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(8px); z-index: 200; display: flex; justify-content: center; align-items: center; opacity: 0; pointer-events: none; transition: opacity 0.4s ease; }
+    .modal-overlay.active { opacity: 1; pointer-events: auto; }
+    .modal-window { background: rgba(10, 10, 10, 0.8); border: 1px solid rgba(255,255,255,0.15); padding: 2.5rem; width: 90%; max-width: 400px; display: flex; flex-direction: column; gap: 1.5rem; transform: translateY(15px); transition: transform 0.4s ease; box-shadow: 0 0 40px rgba(0,0,0,0.8); }
+    .modal-overlay.active .modal-window { transform: translateY(0); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 10px; }
+    .modal-title { font-size: 11px; color: var(--text-bright); letter-spacing: 0.2em; }
+    .modal-close { background: none; border: none; color: var(--text-dim); font-size: 14px; transition: 0.3s; padding: 0; }
+    .modal-list { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; }
+    .list-item { background: none; border: none; font-family: inherit; font-size: 10px; color: var(--text-mid); letter-spacing: 0.15em; text-align: left; padding: 10px; transition: 0.3s; border-left: 2px solid transparent; text-decoration: none; display: block; }
+    @media (hover: hover) and (pointer: fine) { .modal-close:hover { color: var(--text-bright); } .list-item:hover, .list-item.active { color: var(--text-bright); border-left-color: var(--text-bright); background: rgba(255,255,255,0.1); } }
+
+    @media (max-width: 768px) {
+      .audio-controls { bottom: auto; top: 1.5rem; right: 1.5rem; }
+      #hud-layer { top: 1.5rem; left: 1.5rem; }
+      #btn-back { bottom: 1.5rem; left: 1.5rem; font-size: 12px; padding: 10px; }
+      .btn-sys { width: 80%; max-width: 250px; text-align: center; }
+      .modal-window { padding: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 極簡游標 -->
+  <div id="cursor-dot"></div>
+  <div id="flash-overlay"></div>
+
+  <!-- HUD -->
+  <div id="hud-layer" class="fade-ui">
+    <div class="hud-title" data-i18n="hud_title">ASTRONAUT TELEMETRY</div>
+    <div class="hud-stats">
+      <span data-i18n="hud_sys">SYS_STATUS</span> :: <span class="hud-highlight">ONLINE</span><br>
+      <span data-i18n="hud_up">UPLINK</span> :: <span class="hud-highlight" id="hud-ping">12MS</span><br>
+      <span data-i18n="hud_o2">O2_LEVEL</span> :: <span class="hud-highlight">98.4%</span>
+    </div>
+  </div>
+  
+  <button id="btn-back" class="fade-ui" onclick="goBack()" data-i18n="btn_back">[ RETURN ]</button>
+
+  <!-- 背景層 (隱藏) -->
+  <div id="canvas-container"></div>
+  <div class="atmosphere" id="atmosphere"></div>
+  <div class="vignette"></div>
+  <div class="noise"></div>
+
+  <audio id="core-audio" loop crossorigin="anonymous"></audio>
+
+  <!-- Phases -->
+  <div class="phase-layer active" id="phase-1">
+    <div class="phase-title">SYSTEM AWAKEN // SELECT LANGUAGE</div>
+    <div class="options-container">
+      <button class="btn-sys" onclick="setLang('en')">ENGLISH</button>
+      <button class="btn-sys" onclick="setLang('zh')">繁體中文</button>
+    </div>
+  </div>
+
+  <div class="phase-layer" id="phase-2">
+    <div class="phase-title" data-i18n="p2_title">SELECT DEVICE INTERFACE</div>
+    <div class="options-container">
+      <button class="btn-sys" onclick="setDevice('desktop')" data-i18n="p2_desktop">DESKTOP</button>
+      <button class="btn-sys" onclick="setDevice('mobile')" data-i18n="p2_mobile">MOBILE</button>
+    </div>
+  </div>
+
+  <div class="phase-layer" id="phase-3">
+    <div class="phase-title" data-i18n="p3_title">INITIALIZE AUDIO ENGINE?</div>
+    <div class="options-container">
+      <button class="btn-sys" onclick="setAudio(true)" data-i18n="p3_yes">ENABLE</button>
+      <button class="btn-sys" onclick="setAudio(false)" data-i18n="p3_no">BYPASS</button>
+    </div>
+  </div>
+
+  <div class="phase-layer" id="phase-4">
+    <div class="phase-title" data-i18n="p4_title">SELECT FREQUENCY</div>
+    <div class="options-container" style="flex-direction: column; gap: 1rem; align-items: center;" id="track-list-container"></div>
+  </div>
+
+  <div class="phase-layer" id="phase-5">
+    <div id="loading-text" data-i18n="p5_load">SYNCING... 0%</div>
+    <div class="loading-bar"><div class="loading-fill" id="loading-fill"></div></div>
+  </div>
+
+  <div class="phase-layer" id="phase-6">
+    <h1 class="core-title">Wsido Xrtp ECHO</h1>
+    <div class="main-nav fade-ui">
+      <button class="nav-btn" onclick="openModal('modal-playlist')" data-i18n="p6_playlist">[ PLAYLIST ]</button>
+      <button class="nav-btn" onclick="openModal('modal-platforms')" data-i18n="p6_platforms">[ PLATFORMS ]</button>
+    </div>
+    
+    <!-- 音量控制面板 (現在無論如何都會保留) -->
+    <div class="audio-controls fade-ui" id="audio-panel" style="display:none;">
+      <button id="toggle-audio" class="nav-btn" data-i18n="audio_on">[ AUDIO : ON ]</button>
+      <input type="range" id="vol-slider" class="vol-slider" min="0" max="1" step="0.01" value="0.7">
+    </div>
+  </div>
+
+  <!-- Modals -->
+  <div class="modal-overlay" id="modal-playlist" onclick="closeModal(event, 'modal-playlist')">
+    <div class="modal-window">
+      <div class="modal-header">
+        <span class="modal-title" data-i18n="p6_playlist">PLAYLIST</span>
+        <button class="modal-close" onclick="closeModalForce('modal-playlist')">✕</button>
+      </div>
+      <div class="modal-list" id="modal-track-list"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="modal-platforms" onclick="closeModal(event, 'modal-platforms')">
+    <div class="modal-window">
+      <div class="modal-header">
+        <span class="modal-title" data-i18n="p6_platforms">PLATFORMS</span>
+        <button class="modal-close" onclick="closeModalForce('modal-platforms')">✕</button>
+      </div>
+      <div class="modal-list">
+        <a href="https://x.com/wsidoxrtp" target="_blank" class="list-item">X (Twitter)</a>
+        <a href="https://www.youtube.com/@wsidoxrtp" target="_blank" class="list-item">Youtube</a>
+        <a href="https://discord.gg/kt6cWV3eBX" target="_blank" class="list-item">Discord</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Three.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  
+  <script>
+    // ==========================================
+    // 1. 純淨語系系統
+    // ==========================================
+    const DICT = {
+      en: {
+        p2_title: "SELECT DEVICE INTERFACE", p2_desktop: "DESKTOP", p2_mobile: "MOBILE",
+        p3_title: "INITIALIZE AUDIO ENGINE?", p3_yes: "ENABLE", p3_no: "BYPASS",
+        p4_title: "SELECT FREQUENCY", p5_load: "SYNCING DATA...", 
+        p6_playlist: "[ PLAYLIST ]", p6_platforms: "[ PLATFORMS ]", btn_back: "[ RETURN ]",
+        hud_title: "ASTRONAUT TELEMETRY", hud_sys: "SYS_STATUS", hud_up: "UPLINK", hud_o2: "O2_LEVEL",
+        audio_on: "[ AUDIO : ON ]", audio_off: "[ AUDIO : OFF ]"
+      },
+      zh: {
+        p2_title: "選擇設備介面", p2_desktop: "電腦極致體驗", p2_mobile: "行動裝置體驗",
+        p3_title: "啟動空間音訊引擎？", p3_yes: "開啟音訊", p3_no: "略過",
+        p4_title: "選擇共鳴頻率", p5_load: "艙體資料同步中...", 
+        p6_playlist: "[ 曲目清單 ]", p6_platforms: "[ 連結平台 ]", btn_back: "[ 返回上一步 ]",
+        hud_title: "宇航員遙測數據", hud_sys: "系統狀態", hud_up: "上行延遲", hud_o2: "氧氣濃度",
+        audio_on: "[ 音訊 : 開啟 ]", audio_off: "[ 音訊 : 關閉 ]"
+      }
+    };
+
+    const TRACKS = {
+      en: [
+        { name: "01 — Unknown Galaxy", file: "bgm.mp3" },
+        { name: "02 — Space Warp", file: "bgm2.mp3" },
+        { name: "03 — Interstellar Roam", file: "bgm3.mp3" }
+      ],
+      zh: [
+        { name: "01 — 未知星系", file: "bgm.mp3" },
+        { name: "02 — 空間穿梭", file: "bgm2.mp3" },
+        { name: "03 — 星際漫遊", file: "bgm3.mp3" }
+      ]
+    };
+
+    let STATE = { lang: 'en', isMobile: false, audioEnabled: false, trackIdx: 0 };
+    let historyStack = []; 
+    let currentPhase = 1;
+
+    function updateI18n() {
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        if(DICT[STATE.lang][key]) el.innerText = DICT[STATE.lang][key];
+      });
+      renderTrackLists(); 
+    }
+
+    // ==========================================
+    // 2. 完美返回邏輯與防白閃
+    // ==========================================
+    const hudLayer = document.getElementById('hud-layer');
+    const btnBack = document.getElementById('btn-back');
+    let loadInterval;
+    let expTimeouts = [];
+
+    function clearExpTimeouts() {
+      expTimeouts.forEach(clearTimeout);
+      expTimeouts = [];
+      document.getElementById('flash-overlay').style.opacity = '0';
+    }
+
+    function advanceTo(phase, saveHistory = true) {
+      if(saveHistory && currentPhase !== phase) historyStack.push(currentPhase);
+      document.getElementById(`phase-${currentPhase}`).classList.remove('active');
+      currentPhase = phase;
+      document.getElementById(`phase-${currentPhase}`).classList.add('active');
+
+      if(currentPhase >= 2 && currentPhase !== 5) { hudLayer.classList.add('visible'); btnBack.classList.add('visible'); }
+      else { hudLayer.classList.remove('visible'); btnBack.classList.remove('visible'); }
+    }
+
+    function goBack() {
+      if(historyStack.length === 0) return;
+      clearInterval(loadInterval);
+      clearExpTimeouts();
+
+      if(currentPhase === 6 || currentPhase === 5) {
+        document.getElementById(`phase-${currentPhase}`).classList.remove('active');
+        currentPhase = STATE.audioEnabled ? 4 : 3; 
+        document.getElementById(`phase-${currentPhase}`).classList.add('active');
+        
+        isCollapsing = false; fovTarget = 60;
+        
+        coreAudio.pause();
+        coreAudio.removeAttribute('src'); // 返回時清空音訊來源
+        document.getElementById('toggle-audio').innerText = DICT[STATE.lang].audio_off;
+        document.getElementById('canvas-container').classList.remove('show');
+        document.getElementById('atmosphere').classList.remove('show');
+        
+        document.getElementById('audio-panel').style.display = 'none'; // 隱藏面板直到再次進入主UI
+        hudLayer.classList.add('visible'); btnBack.classList.add('visible');
+        return;
+      }
+
+      const prevPhase = historyStack.pop();
+      document.getElementById(`phase-${currentPhase}`).classList.remove('active');
+      currentPhase = prevPhase;
+      document.getElementById(`phase-${currentPhase}`).classList.add('active');
+
+      if(currentPhase === 1) { hudLayer.classList.remove('visible'); btnBack.classList.remove('visible'); }
+      else { hudLayer.classList.add('visible'); btnBack.classList.add('visible'); }
+    }
+
+    function setLang(lang) { STATE.lang = lang; updateI18n(); advanceTo(2); }
+    function setDevice(type) {
+      STATE.isMobile = (type === 'mobile');
+      if(STATE.isMobile) document.body.classList.add('mobile-mode');
+      else document.body.classList.remove('mobile-mode');
+      initThreeJS(); advanceTo(3);
+    }
+    function setAudio(enable) {
+      STATE.audioEnabled = enable;
+      document.getElementById('audio-panel').style.display = 'flex'; // 無論如何，主畫面都要顯示音訊面板
+      
+      if(enable) {
+        advanceTo(4); 
+      } else {
+        document.getElementById('toggle-audio').innerText = DICT[STATE.lang].audio_off; // 設為 OFF 狀態
+        startLoadingProcess(); 
+      }
+    }
+    function selectTrackAndLoad(idx) { STATE.trackIdx = idx; startLoadingProcess(); }
+
+    function renderTrackLists() {
+      const p4Container = document.getElementById('track-list-container');
+      const modalContainer = document.getElementById('modal-track-list');
+      p4Container.innerHTML = ''; modalContainer.innerHTML = '';
+
+      TRACKS[STATE.lang].forEach((track, idx) => {
+        const btn = document.createElement('button');
+        btn.className = 'btn-sys'; btn.innerText = track.name;
+        btn.onclick = () => selectTrackAndLoad(idx);
+        p4Container.appendChild(btn);
+
+        const mBtn = document.createElement('button');
+        mBtn.className = 'list-item';
+        if(idx === STATE.trackIdx) mBtn.classList.add('active');
+        mBtn.innerText = track.name;
+        mBtn.onclick = () => { STATE.trackIdx = idx; renderTrackLists(); playCurrentTrack(); };
+        modalContainer.appendChild(mBtn);
+      });
+    }
+
+    // ==========================================
+    // 3. 音訊系統與漸層滑桿 (移除律動綁定)
+    // ==========================================
+    const coreAudio = document.getElementById('core-audio');
+    const audioToggle = document.getElementById('toggle-audio');
+    const volumeSlider = document.getElementById('vol-slider');
+
+    function updateSliderBg(val) {
+      const percentage = val * 100;
+      volumeSlider.style.background = `linear-gradient(to right, #ffffff ${percentage}%, rgba(255,255,255,0.2) ${percentage}%)`;
+    }
+    
+    volumeSlider.addEventListener('input', e => {
+      coreAudio.volume = e.target.value;
+      updateSliderBg(e.target.value);
+    });
+    updateSliderBg(0.7); // 初始化音量條背景
+
+    audioToggle.addEventListener('click', e => {
+      if(coreAudio.paused) { 
+        // 檢查是否從未載入過音樂 (例如略過時)
+        if (!coreAudio.getAttribute('src')) {
+          playCurrentTrack();
+        } else {
+          coreAudio.play().catch(err => console.log("Audio blocked")); 
+          e.target.innerText = DICT[STATE.lang].audio_on; 
+        }
+      }
+      else { 
+        coreAudio.pause(); 
+        e.target.innerText = DICT[STATE.lang].audio_off; 
+      }
+    });
+
+    function playCurrentTrack() {
+      coreAudio.pause(); 
+      coreAudio.src = TRACKS[STATE.lang][STATE.trackIdx].file;
+      coreAudio.load(); 
+      coreAudio.play().catch(e => console.log("Audio blocked"));
+      audioToggle.innerText = DICT[STATE.lang].audio_on;
+      document.getElementById('audio-panel').style.display = 'flex'; // 確保顯示面板
+    }
+
+    // ==========================================
+    // 4. 掛機模式與極簡游標
+    // ==========================================
+    let idleTimer;
+    function resetIdle() {
+      document.body.classList.remove('idle-mode');
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if(currentPhase === 6 && !document.querySelector('.modal-overlay.active')) {
+          document.body.classList.add('idle-mode');
+        }
+      }, 5000); 
+    }
+
+    document.addEventListener('mousemove', resetIdle);
+    document.addEventListener('mousedown', resetIdle);
+    document.addEventListener('keydown', resetIdle);
+    resetIdle();
+
+    const cursorDot = document.getElementById('cursor-dot');
+    let mX = window.innerWidth/2, mY = window.innerHeight/2;
+
+    document.addEventListener('mousemove', (e) => {
+      if(STATE.isMobile) return;
+      mX = e.clientX; mY = e.clientY;
+      // 乾淨的白點直接跟隨，不延遲
+      cursorDot.style.transform = `translate(${mX}px, ${mY}px) translate(-50%, -50%)`;
+    });
+
+    function openModal(id) { document.getElementById(id).classList.add('active'); document.body.style.overflow = 'hidden'; }
+    function closeModal(e, id) { if(e.target.id === id) { document.getElementById(id).classList.remove('active'); document.body.style.overflow = ''; } }
+    function closeModalForce(id) { document.getElementById(id).classList.remove('active'); document.body.style.overflow = ''; }
+    document.addEventListener('keydown', (e) => { if(e.key === 'Escape') document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active')); });
+
+    // ==========================================
+    // 5. 載入與空間塌陷大霹靂 (從 Archive 移植)
+    // ==========================================
+    let isCollapsing = false, fovTarget = 60;
+
+    function startLoadingProcess() {
+      advanceTo(5, true); 
+      btnBack.classList.remove('visible'); 
+
+      const loadText = document.getElementById('loading-text');
+      const loadFill = document.getElementById('loading-fill');
+      const baseText = DICT[STATE.lang].p5_load;
+      
+      let progress = 0;
+      loadInterval = setInterval(() => {
+        progress += Math.floor(Math.random() * 15 + 5);
+        if(progress >= 100) progress = 100;
+        
+        loadText.innerText = `${baseText} ${progress}%`;
+        loadFill.style.width = `${progress}%`;
+
+        if(progress === 100) {
+          clearInterval(loadInterval);
+          prepareExplosion();
+        }
+      }, 150);
+    }
+
+    function prepareExplosion() {
+      // 觸發塌陷動畫
+      isCollapsing = true; 
+      fovTarget = 150; // 空間拉伸
+      
+      document.getElementById('canvas-container').classList.add('show');
+      document.getElementById('atmosphere').classList.add('show');
+      
+      let t1 = setTimeout(() => {
+        const flash = document.getElementById('flash-overlay');
+        flash.style.transition = 'none'; flash.style.opacity = '1';
+        
+        if(STATE.audioEnabled) {
+          playCurrentTrack(); 
+          document.getElementById('toggle-audio').innerText = DICT[STATE.lang].audio_on;
+        }
+
+        let t2 = setTimeout(() => {
+          advanceTo(6, false); 
+          isCollapsing = false; 
+          fovTarget = 60; // 瞬間恢復正常視野
+          
+          flash.style.transition = 'opacity 2s ease-out'; flash.style.opacity = '0';
+        }, 100);
+        expTimeouts.push(t2);
+      }, 1500); // 讓塌陷動畫跑 1.5 秒
+      expTimeouts.push(t1);
+    }
+
+    // ==========================================
+    // 6. Three.js: 唯美 Monolith 與星塵 (從 Archive 移植)
+    // ==========================================
+    let scene, camera, renderer, particles, coreMesh;
+
+    function initThreeJS() {
+      const container = document.getElementById('canvas-container');
+      if(scene) scene.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose()); else obj.material.dispose(); } });
+      if(renderer) { renderer.dispose(); renderer.forceContextLoss(); renderer.domElement = null; renderer = null; }
+      container.innerHTML = ''; 
+
+      scene = new THREE.Scene(); 
+      scene.fog = new THREE.FogExp2(0x000000, 0.03); // 優美薄霧
+      camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100); 
+      camera.position.z = 20;
+
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: !STATE.isMobile });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(STATE.isMobile ? 1 : Math.min(window.devicePixelRatio, 1.5));
+      container.appendChild(renderer.domElement);
+
+      // --- The Monolith 中景主體 ---
+      const coreGeometry = new THREE.IcosahedronGeometry(4, 2);
+      const coreMaterial = new THREE.MeshBasicMaterial({
+        color: 0x222233,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.15,
+        blending: THREE.AdditiveBlending
+      });
+      coreMesh = new THREE.Mesh(coreGeometry, coreMaterial);
+      scene.add(coreMesh);
+
+      // 核心微光
+      const innerLight = new THREE.PointLight(0x5566aa, 1, 15);
+      scene.add(innerLight);
+
+      // --- 漸亮星塵 (中心空、四周密) ---
+      const pCount = STATE.isMobile ? 800 : 2500;
+      const pGeo = new THREE.BufferGeometry();
+      const pPos = new Float32Array(pCount * 3);
+      const pSize = new Float32Array(pCount); 
+
+      for(let i=0; i<pCount; i++) {
+        const radius = 5 + Math.pow(Math.random(), 2) * 40; 
+        const theta = Math.random() * Math.PI * 2; 
+        const phi = Math.acos((Math.random() * 2) - 1);
+        
+        pPos[i*3] = radius * Math.sin(phi) * Math.cos(theta); 
+        pPos[i*3+1] = radius * Math.sin(phi) * Math.sin(theta); 
+        pPos[i*3+2] = radius * Math.cos(phi);
+
+        let rand = Math.random();
+        if(rand < 0.7) pSize[i] = 0.5;
+        else if (rand < 0.9) pSize[i] = 1.5;
+        else pSize[i] = 3.0;
+      }
+      
+      pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+      pGeo.setAttribute('size', new THREE.BufferAttribute(pSize, 1));
+      
+      const pMat = new THREE.ShaderMaterial({
+        uniforms: { color: { value: new THREE.Color(0xffffff) } },
+        vertexShader: `
+          attribute float size;
+          void main() {
+            vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+            gl_PointSize = size * (15.0 / -mvPosition.z);
+            gl_Position = projectionMatrix * mvPosition;
+          }`,
+        fragmentShader: `
+          uniform vec3 color;
+          void main() {
+            float dist = distance(gl_PointCoord, vec2(0.5));
+            if(dist > 0.5) discard;
+            gl_FragColor = vec4(color, 0.4 * (1.0 - dist * 2.0));
+          }`,
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+      });
+      particles = new THREE.Points(pGeo, pMat); scene.add(particles);
+    }
+
+    const clock = new THREE.Clock();
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const time = clock.getElapsedTime();
+
+      if(coreMesh) {
+        // 移除音樂律動，改為優雅自轉
+        coreMesh.rotation.y = time * 0.1; 
+        coreMesh.rotation.x = time * 0.05;
+
+        // 跟隨滑鼠產生微弱的空間重心偏移
+        if(!STATE.isMobile) {
+          const targetX = (mX / window.innerWidth - 0.5) * 2;
+          const targetY = -(mY / window.innerHeight - 0.5) * 2;
+          coreMesh.position.x += (targetX * 1.5 - coreMesh.position.x) * 0.05;
+          coreMesh.position.y += (targetY * 1.5 - coreMesh.position.y) * 0.05;
+        }
+      }
+
+      if(particles) {
+        if(isCollapsing) {
+          // 塌陷動畫：所有粒子向中心拉扯，FOV 變大
+          particles.scale.lerp(new THREE.Vector3(0.01, 0.01, 0.01), 0.05);
+          camera.fov += (fovTarget - camera.fov) * 0.1; 
+          camera.updateProjectionMatrix();
+        } else {
+          // 恢復並維持正常的宇宙空間
+          particles.scale.lerp(new THREE.Vector3(1, 1, 1), 0.1);
+          camera.fov += (fovTarget - camera.fov) * 0.05; 
+          camera.updateProjectionMatrix();
+          
+          // 星塵緩慢流動
+          particles.rotation.y += 0.0005;
+          particles.rotation.z += 0.0002;
+        }
+      }
+
+      if(renderer) renderer.render(scene, camera);
+    }
+    
+    initThreeJS();
+    animate();
+    
+    window.addEventListener('resize', () => {
+      if(camera && renderer) {
+        camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+    });
+
+  </script>
+</body>
+</html>
